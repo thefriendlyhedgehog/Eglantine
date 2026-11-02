@@ -630,6 +630,28 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     }
     pipeline_cache_filename = base_dir / "vulkan.bin";
 
+    // Boot-time precompile. Off by default: the disk cache stores each pipeline's key and its
+    // environments, never translated SPIR-V or compiled driver code, so rebuilding it re-runs
+    // translation and the driver's compiler for every entry -- 256 pipelines cost ~4-5 s on
+    // MoltenVK, on every launch, even when nothing new was seen. With it off, the pipelines are
+    // built the first time the game draws them and saved as usual; the MoltenVK driver cache is
+    // left alone too, since restoring its blob costs about what compiling it costs.
+    //
+    // EDEN_NX2_BOOT_PRECOMPILE=1 restores the old behaviour (rebuild everything before the first
+    // frame). The ceiling of the lazy path: a pipeline the game has not drawn yet stalls its
+    // first draw instead of the boot. The upgrade is a persistent translation cache, keyed by
+    // ShaderTranslationKey and holding the SPIR-V plus Shader::Info.
+    static const bool boot_precompile{[] {
+        const char* value = std::getenv("EDEN_NX2_BOOT_PRECOMPILE");
+        return value != nullptr && value[0] == '1';
+    }()};
+
+    if (!boot_precompile) {
+        LOG_INFO(Render_Vulkan, "Skipping the boot precompile; pipelines are built on first use");
+        callback(VideoCore::LoadCallbackStage::Build, 0, 0);
+        return;
+    }
+
     if (use_vulkan_pipeline_cache) {
         vulkan_pipeline_cache_filename = base_dir / "vulkan_pipelines.bin";
         vulkan_pipeline_cache =
